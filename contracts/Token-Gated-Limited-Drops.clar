@@ -14,6 +14,7 @@
 (define-constant ERR_DROP_NOT_STARTED (err u108))
 (define-constant ERR_DROP_ENDED (err u109))
 (define-constant ERR_ALREADY_PURCHASED (err u110))
+(define-constant ERR_NOT_WHITELISTED (err u111))
 
 ;; Data Variables
 (define-data-var next-drop-id uint u1)
@@ -50,6 +51,16 @@
 (define-map drop-earnings
   uint
   uint
+)
+
+(define-map drop-whitelist
+  { drop-id: uint, user: principal }
+  bool
+)
+
+(define-map drop-whitelist-enabled
+  uint
+  bool
 )
 
 ;; NFT Trait
@@ -109,6 +120,7 @@
       (total-cost (* (get price drop) quantity))
       (new-purchase-count (+ current-purchases quantity))
       (new-sold-count (+ (get sold-count drop) quantity))
+      (whitelist-enabled (default-to false (map-get? drop-whitelist-enabled drop-id)))
     )
     (asserts! (not (var-get contract-paused)) (err u300))
     (asserts! (get is-active drop) ERR_DROP_INACTIVE)
@@ -117,6 +129,11 @@
     (asserts! (<= new-sold-count (get total-supply drop)) ERR_DROP_SOLD_OUT)
     (asserts! (<= new-purchase-count (get max-per-user drop)) ERR_PURCHASE_LIMIT_EXCEEDED)
     (asserts! (> quantity u0) (err u301))
+    
+    (if whitelist-enabled
+      (asserts! (default-to false (map-get? drop-whitelist { drop-id: drop-id, user: tx-sender })) ERR_NOT_WHITELISTED)
+      true
+    )
     
     (try! (verify-nft-holder tx-sender (get nft-contract drop)))
     
@@ -203,6 +220,67 @@
   )
 )
 
+(define-public (enable-drop-whitelist (drop-id uint))
+  (let
+    (
+      (drop (unwrap! (map-get? drops drop-id) ERR_NOT_FOUND))
+    )
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_OWNER_ONLY)
+    (map-set drop-whitelist-enabled drop-id true)
+    (ok true)
+  )
+)
+
+(define-public (disable-drop-whitelist (drop-id uint))
+  (let
+    (
+      (drop (unwrap! (map-get? drops drop-id) ERR_NOT_FOUND))
+    )
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_OWNER_ONLY)
+    (map-set drop-whitelist-enabled drop-id false)
+    (ok true)
+  )
+)
+
+(define-public (add-to-whitelist (drop-id uint) (user principal))
+  (let
+    (
+      (drop (unwrap! (map-get? drops drop-id) ERR_NOT_FOUND))
+    )
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_OWNER_ONLY)
+    (map-set drop-whitelist { drop-id: drop-id, user: user } true)
+    (ok true)
+  )
+)
+
+(define-public (remove-from-whitelist (drop-id uint) (user principal))
+  (let
+    (
+      (drop (unwrap! (map-get? drops drop-id) ERR_NOT_FOUND))
+    )
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_OWNER_ONLY)
+    (map-delete drop-whitelist { drop-id: drop-id, user: user })
+    (ok true)
+  )
+)
+
+(define-public (batch-add-to-whitelist (drop-id uint) (users (list 100 principal)))
+  (let
+    (
+      (drop (unwrap! (map-get? drops drop-id) ERR_NOT_FOUND))
+    )
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_OWNER_ONLY)
+    (ok (fold add-user-to-whitelist-fold users drop-id))
+  )
+)
+
+(define-private (add-user-to-whitelist-fold (user principal) (drop-id uint))
+  (begin
+    (map-set drop-whitelist { drop-id: drop-id, user: user } true)
+    drop-id
+  )
+)
+
 ;; Read-only Functions
 
 (define-read-only (get-drop (drop-id uint))
@@ -227,6 +305,14 @@
 
 (define-read-only (is-contract-paused)
   (var-get contract-paused)
+)
+
+(define-read-only (is-whitelisted (drop-id uint) (user principal))
+  (default-to false (map-get? drop-whitelist { drop-id: drop-id, user: user }))
+)
+
+(define-read-only (is-whitelist-enabled (drop-id uint))
+  (default-to false (map-get? drop-whitelist-enabled drop-id))
 )
 
 (define-read-only (get-drop-availability (drop-id uint))
